@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "simulator.h": "c",
+        "signal.h": "c"
+    }
+}
