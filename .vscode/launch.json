@@ -9,7 +9,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/test-lru",
-            "args": [],
+            "args": ["-page"],
             "stopAtEntry": false,
             "cwd": "${fileDirname}",
             "environment": [],

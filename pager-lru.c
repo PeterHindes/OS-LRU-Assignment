@@ -10,8 +10,7 @@
 
 #define new_max(x,y) (((x) >= (y)) ? (x) : (y))
 
-void pageit(Pentry q[MAXPROCESSES]) { 
-
+void pageit(Pentry q[MAXPROCESSES]) {
     /* Static vars */
     static int initialized = 0;
     static int tick = 1; // artificial time
@@ -31,44 +30,66 @@ void pageit(Pentry q[MAXPROCESSES]) {
         initialized = 1;
     }
     
-    /* TODO: Implement LRU Paging */
-    // fprintf(stderr, "pager-lru not yet implemented. Exiting...\n");
-    // exit(EXIT_FAILURE);
-    proc = (tick-1) % MAXPROCESSES;
+    /* LRU Paging */
+    // proc = (tick-1) % MAXPROCESSES;
+    #define LOOKAHEAD 5
+    int remainingProcesses = PHYSICALPAGES/LOOKAHEAD;
+    for (int proc = 0; proc < MAXPROCESSES; proc++) {
 
-    int pc = q[proc].pc; 		            	// program counter for process
-    page = pc/PAGESIZE; 		        	// current page the PC is on
-    
-    // select only active processes
-    // if the page is already in memory, then we're done
-    // if not in memory, then page it in
-    if (q[proc].active == 1 && !q[proc].pages[page]) {
-        if (pagein(proc,page)){ // If it becomes paged set the timestamp
-            timestamps[proc][page] = tick;
-        }
-        else { // If it doesn't become paged then find the least recently used page and evict it!
-            int minTime = INT_MAX;
-            int minProc = -1;
-            int minPage = -1;
-            for (int lproc=0; lproc < MAXPROCESSES; lproc++) {
-                for (int lpage=0; lpage < MAXPROCPAGES; lpage++) {
-                    if (q[lproc].pages[lpage] == 1 && minTime > timestamps[lproc][lpage] ){ // only interested in pages that are in memory and with a lower timestamp
-                        minTime = timestamps[lproc][lpage];
-                        minProc = lproc;
-                        minPage = lpage;
-                    }
+        int pc = q[proc].pc; 	// program counter for process
+        page = pc/PAGESIZE; 	// current page the PC is on
+        
+        // select only active processes
+        if (q[proc].active == 1 && remainingProcesses > 0) {
+            for (int i = 0; i < page; i++)
+            {
+                pageout(proc,i);
+            }
+            
+            for (int i = page; i < page + LOOKAHEAD; i++)
+            {
+                if(!pagein(proc,i)) {
+                    // fprintf(stderr, "Error, couldn't allocate page selected!\n");
+                    // raise(SIGINT);
+                    break;
                 }
             }
-            if (pageout(minProc,minPage) == 1) {
-                timestamps[minProc][minPage] = INT_MAX;
-                pagein(proc,page);
-                timestamps[proc][page] = tick;
-            }
-            else { // Might happen if everything is currently swapping in.
-                fprintf(stderr, "Error, couldnt evict page selected in lru!\n");
-                raise(SIGSEGV);
-            }
 
+            for (int i = page + LOOKAHEAD; i < MAXPROCPAGES; i++)
+            {
+                pageout(proc,i);
+            }
+            
+            remainingProcesses --;
+            
+            // if (pagein(proc,page)){ // If it becomes paged set the timestamp
+            //     timestamps[proc][page] = tick;
+            // }
+            // else { // If it doesn't become paged then find the least recently used page and evict it!
+            //     int minTime = INT_MAX;
+            //     int minProc = -1;
+            //     int minPage = -1;
+            //     for (int lproc=0; lproc < MAXPROCESSES; lproc++) {
+            //         for (int lpage=0; lpage < MAXPROCPAGES; lpage++) {
+            //             if (q[lproc].pages[lpage] == 1 && minTime > timestamps[lproc][lpage] ){ // only interested in pages that are in memory and with a lower timestamp
+            //                 minTime = timestamps[lproc][lpage];
+            //                 minProc = lproc;
+            //                 minPage = lpage;
+            //             }
+            //         }
+            //     }
+            //     if (pageout(minProc,minPage) == 1) {
+            //         timestamps[minProc][minPage] = INT_MAX;
+            //         pagein(proc,page);
+            //         timestamps[proc][page] = tick;
+            //     }
+            //     else { // Might happen if everything is currently swapping in.
+            //         // break;
+            //         // fprintf(stderr, "Error, couldn't evict page selected in lru!\n");
+            //         // raise(SIGSEGV);
+            //     }
+
+            // }
         }
     }
     
