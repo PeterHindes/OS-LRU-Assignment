@@ -48,10 +48,12 @@ void pageit(Pentry q[MAXPROCESSES]) {
             
             for (int i = page; i < page + LOOKAHEAD; i++)
             {
-                if(!pagein(proc,i)) {
-                    // fprintf(stderr, "Error, couldn't allocate page selected!\n");
-                    // raise(SIGINT);
-                    break;
+                if (!q[proc].pages[page]) {
+                    if(!pagein(proc,i)) {
+                        // fprintf(stderr, "Error, couldn't allocate page selected!\n");
+                        // raise(SIGINT);
+                        break;
+                    }
                 }
             }
 
