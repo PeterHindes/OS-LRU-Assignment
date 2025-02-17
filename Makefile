@@ -8,12 +8,15 @@ SUBMITFILES = pager-lru.c
 
 .PHONY: all clean
 
-all: test-basic test-lru
+all: test-basic test-lru test-lookahead
 
 test-basic: simulator.o pager-basic.o programs.o
 	$(CC) $(LFLAGS) $^ -o $@
 
 test-lru: simulator.o pager-lru.o programs.o
+	$(CC) $(LFLAGS) $^ -o $@
+
+test-lookahead: simulator.o pager-lookahead.o programs.o
 	$(CC) $(LFLAGS) $^ -o $@
 
 simulator.o: simulator.c programs.o simulator.h
@@ -26,6 +29,9 @@ pager-basic.o: pager-basic.c simulator.h programs.c
 	$(CC) $(CFLAGS) $<
 
 pager-lru.o: pager-lru.c simulator.h programs.c   
+	$(CC) $(CFLAGS) $<
+
+pager-lookahead.o: pager-lookahead.c simulator.h programs.c   
 	$(CC) $(CFLAGS) $<
 
 clean:
