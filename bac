@@ -1,0 +1,208 @@
+#include <stdio.h>
+#include <signal.h>
+#include <stdlib.h>
+#include "simulator.h"
+#include <limits.h>
+#include <stdbool.h>
+
+#define new_max(x, y) (((x) >= (y)) ? (x) : (y))
+#define new_min(x, y) (((x) <= (y)) ? (x) : (y))
+
+/* Tunable parameters - optimized values */
+#define DECAY_ENABLED 1         // Keep enabled for most workloads
+#define LOOP_DETECTION_ENABLED 1 // Keep enabled for programs with loops
+#define DECAY_INTERVAL 750      // Decay ~4 times per 3000 tick run
+#define DECAY_FACTOR 0.8        // 20% reduction - balances recent vs old history
+#define FREQUENCY_THRESHOLD 1.3 // More inclusive to prevent thrashing
+#define LOOP_DETECTION_THRESHOLD 75  // Tighter window for more confident loop detection
+#define MAX_LOOP_SIZE 10        // Support moderately-sized loops
+#define LOOP_CONFIDENCE_THRESHOLD 3  // Faster loop detection
+#define LOOP_CONFIDENCE_DECAY 250    // Give loops more time to establish
+#define BASE_LOOKAHEAD 5        // Balance between preloading and memory efficiency
+#define POST_LOOP_PAGES 3       // Prefetch more after loop exit
+#define MIN_PAGES_PER_PROC 5    // Ensure enough pages for basic operation
+#define MAX_PAGES_PER_PROC 12   // Allow processes to use more memory when available
+#define RECENTLY_USED_TICKS 40  // Protect recently used pages without being too aggressive
+
+void pageit(Pentry q[MAXPROCESSES])
+{
+    /* Static vars */
+    static int tick = 1; // artificial time
+    static int access_counts[MAXPROCESSES][MAXPROCPAGES] = {0}; // Track page access frequency
+    static int last_access[MAXPROCESSES][MAXPROCPAGES] = {0};   // Track when page was last accessed
+    static int loop_start[MAXPROCESSES] = {0};  // Starting page of detected loop
+    static int loop_end[MAXPROCESSES] = {0};    // Ending page of detected loop
+    static int consecutive_hits[MAXPROCESSES] = {0}; // Count consecutive hits in same page range
+    static int last_decision[MAXPROCESSES][MAXPROCPAGES] = {0}; // Track when we last decided to keep a page
+
+    /* Local vars */
+    int page;
+
+    /* Decay access counts periodically */
+    if (DECAY_ENABLED && tick % DECAY_INTERVAL == 0) {
+        for (int proc = 0; proc < MAXPROCESSES; proc++) {
+            for (int p = 0; p < MAXPROCPAGES; p++) {
+                access_counts[proc][p] = (int)(access_counts[proc][p] * DECAY_FACTOR);
+            }
+        }
+    }
+
+    /* Count active processes for fair memory allocation */
+    int active_procs = 0;
+    for (int proc = 0; proc < MAXPROCESSES; proc++) {
+        if (q[proc].active) active_procs++;
+    }
+    
+    /* Calculate pages per process with constraints */
+    int base_pages = (active_procs > 0) ? (PHYSICALPAGES / active_procs) : 0;
+    int pages_per_proc = new_min(MAX_PAGES_PER_PROC, new_max(MIN_PAGES_PER_PROC, base_pages));
+
+    /* Process each active process */
+    for (int proc = 0; proc < MAXPROCESSES; proc++) {
+        if (q[proc].active) {
+            int pc = q[proc].pc;
+            page = pc / PAGESIZE;
+            
+            /* Update access count and timestamp for current page */
+            access_counts[proc][page]++;
+            last_access[proc][page] = tick;
+            
+            /* Calculate average access count for this process */
+            int total_count = 0, count_pages = 0;
+            for (int p = 0; p < MAXPROCPAGES; p++) {
+                if (access_counts[proc][p] > 0) {
+                    total_count += access_counts[proc][p];
+                    count_pages++;
+                }
+            }
+            double avg_access = (count_pages > 0) ? ((double)total_count / count_pages) : 0;
+            
+            /* Improved loop detection logic with better stability */
+            bool loop_detected = false;
+            int time_since_last = tick - last_access[proc][page];
+            
+            if (LOOP_DETECTION_ENABLED) {
+                /* Basic loop detection based on revisit time */
+                bool quick_revisit = (time_since_last > 0 && time_since_last < LOOP_DETECTION_THRESHOLD);
+                
+                /* Update loop boundaries if we're revisiting pages quickly */
+                if (quick_revisit) {
+                    /* First potential loop detection */
+                    if (consecutive_hits[proc] == 0) {
+                        loop_start[proc] = page;
+                        loop_end[proc] = page;
+                        consecutive_hits[proc] = 1;
+                    } 
+                    /* Update existing potential loop */
+                    else {
+                        /* If within reasonable distance of loop start, update loop boundaries */
+                        if (page >= loop_start[proc] - 1 && 
+                            page <= loop_end[proc] + 1 && 
+                            (loop_end[proc] - loop_start[proc] + 1) < MAX_LOOP_SIZE) {
+                            
+                            loop_start[proc] = new_min(loop_start[proc], page);
+                            loop_end[proc] = new_max(loop_end[proc], page);
+                            consecutive_hits[proc]++;
+                            
+                            /* Confirm loop after sufficient evidence */
+                            if (consecutive_hits[proc] >= LOOP_CONFIDENCE_THRESHOLD) {
+                                loop_detected = true;
+                            }
+                        } 
+                        /* If outside expected loop range but still quick, maybe it's a new loop */
+                        else {
+                            loop_start[proc] = page;
+                            loop_end[proc] = page;
+                            consecutive_hits[proc] = 1;
+                        }
+                    }
+                }
+                /* More aggressive loop confidence decay to prevent getting stuck */
+                else if (tick % LOOP_CONFIDENCE_DECAY == 0) {
+                    /* Decay loop confidence over time if not reinforced */
+                    consecutive_hits[proc] = consecutive_hits[proc] / 2;
+                    if (consecutive_hits[proc] < 2) {
+                        loop_detected = false;
+                        consecutive_hits[proc] = 0;
+                    }
+                }
+            }
+            
+            /* Create array to track which pages to keep in memory */
+            int keep_in_memory[MAXPROCPAGES] = {0};
+            int pages_to_keep = 0;
+            
+            /* Always keep current page */
+            keep_in_memory[page] = 1;
+            pages_to_keep++;
+            
+            /* If loop detected and not too large, load all loop pages plus a few after */
+            if (loop_detected && LOOP_DETECTION_ENABLED && 
+                (loop_end[proc] - loop_start[proc] + 1) <= MAX_LOOP_SIZE) {
+                
+                /* Keep all pages in the loop */
+                for (int p = loop_start[proc]; p <= loop_end[proc] && pages_to_keep < pages_per_proc; p++) {
+                    if (p >= 0 && p < MAXPROCPAGES && !keep_in_memory[p]) {
+                        keep_in_memory[p] = 1;
+                        pages_to_keep++;
+                    }
+                }
+                
+                /* Keep a few pages after the loop */
+                for (int offset = 1; offset <= POST_LOOP_PAGES && 
+                     loop_end[proc] + offset < MAXPROCPAGES && 
+                     pages_to_keep < pages_per_proc; offset++) {
+                    keep_in_memory[loop_end[proc] + offset] = 1;
+                    pages_to_keep++;
+                }
+            } 
+            /* No loop detected, use standard lookahead */
+            else {
+                for (int offset = 1; offset <= BASE_LOOKAHEAD && 
+                     page + offset < MAXPROCPAGES && 
+                     pages_to_keep < pages_per_proc; offset++) {
+                    keep_in_memory[page + offset] = 1;
+                    pages_to_keep++;
+                }
+            }
+            
+            /* Keep recently used pages to prevent thrashing */
+            for (int p = 0; p < MAXPROCPAGES && pages_to_keep < pages_per_proc; p++) {
+                if (!keep_in_memory[p] && (tick - last_access[proc][p]) < RECENTLY_USED_TICKS) {
+                    keep_in_memory[p] = 1;
+                    pages_to_keep++;
+                }
+            }
+            
+            /* Keep frequently accessed pages */
+            for (int p = 0; p < MAXPROCPAGES && pages_to_keep < pages_per_proc; p++) {
+                if (!keep_in_memory[p] && access_counts[proc][p] > FREQUENCY_THRESHOLD * avg_access) {
+                    keep_in_memory[p] = 1;
+                    pages_to_keep++;
+                }
+            }
+            
+            /* Page in/out based on our decisions with anti-thrashing protection */
+            for (int p = 0; p < MAXPROCPAGES; p++) {
+                if (keep_in_memory[p]) {
+                    if (!q[proc].pages[p]) {
+                        /* Try to page in, but don't force it if we can't */
+                        if (!pagein(proc, p)) break;
+                    }
+                    last_decision[proc][p] = tick; // Record when we decided to keep this page
+                } else {
+                    /* Only page out if it wasn't recently decided to keep it */
+                    if (tick - last_decision[proc][p] > 10) {
+                        pageout(proc, p);
+                    }
+                }
+            }
+        } else {
+            /* Reset state when process is inactive */
+            consecutive_hits[proc] = 0;
+        }
+    }
+
+    /* advance time */
+    tick++;
+}

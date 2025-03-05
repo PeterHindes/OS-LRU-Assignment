@@ -14,7 +14,7 @@
 #define PAGEWAIT        100 		    /* wait for paging in */ 
 #define PHYSICALPAGES   100	            /* number of available physical pages */ 
 #define QUEUESIZE       40              /* total number of processes to run */
-#define PROGRAMS        5               /* total number of program types */
+#define PROGRAMS        10              /* total number of program types */
 
 #define MAXBRANCHES     40	            /* number of branches in a program */ 
 #define MAXEXITS        10	            /* number of maximum exits per program */ 

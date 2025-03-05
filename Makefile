@@ -1,52 +1,31 @@
-# CSCI3753 - FA23 PA7
+# CSCI3753 - FA23 PA8
 
 CC = gcc
 CFLAGS = -c -g -Wall -Wextra
 LFLAGS = -g -Wall -Wextra
 
-SUBMITFILES = pager-lru.c
+SUBMITFILES = pager-predict.c
 
 .PHONY: all clean
 
-all: test-basic test-lru test-lookahead test-lru-hybrid
+all: test-predict
 
-test-basic: simulator.o pager-basic.o programs.o
-	$(CC) $(LFLAGS) $^ -o $@
-
-test-lru: simulator.o pager-lru.o programs.o
-	$(CC) $(LFLAGS) $^ -o $@
-
-test-lookahead: simulator.o pager-lookahead.o programs.o
-	$(CC) $(LFLAGS) $^ -o $@
-
-test-lru-hybrid: simulator.o pager-lru-hybrid.o programs.o
+test-predict: simulator.o pager-predict.o programs.o
 	$(CC) $(LFLAGS) $^ -o $@
 
 simulator.o: simulator.c programs.o simulator.h
 	$(CC) $(CFLAGS) $<
 
-programs.o: programs.c simulator.h
-	$(CC) $(CFLAGS) $<
-
-pager-basic.o: pager-basic.c simulator.h programs.c
-	$(CC) $(CFLAGS) $<
-
-pager-lru.o: pager-lru.c simulator.h programs.c   
-	$(CC) $(CFLAGS) $<
-
-pager-lookahead.o: pager-lookahead.c simulator.h programs.c   
-	$(CC) $(CFLAGS) $<
-
-pager-lru-hybrid.o: pager-lru-hybrid.c simulator.h programs.c   
+pager-predict.o: pager-predict.c simulator.h
 	$(CC) $(CFLAGS) $<
 
 clean:
-	rm -f test-basic test-lru test-predict test-api
-	rm -f *.o
+	rm -f test-basic test-predict test-predict test-api
+	rm -f simulator.o pager-predict.o
 	rm -f *~
 	rm -f *.csv
 	rm -f *.pdf
 
 submit: 
 	@read -r -p "please enter your identikey username: " username; \
-	tar -cvf PA7-$$username.txt $(SUBMITFILES)
+	tar -cvf PA8-$$username.txt $(SUBMITFILES)
