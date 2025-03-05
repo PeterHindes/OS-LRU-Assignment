@@ -762,7 +762,9 @@ int main(int argc, char **argv) {
 	}
     } 
     if (seed==0) { 
-	seed = (time(NULL)*38491+71831+time(NULL)*time(NULL))&((1<<30)-1); 
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        seed = (ts.tv_sec*38491+71831+ts.tv_nsec)&((1<<30)-1);
     } 
     srand48(seed); 
     sim_log(LOG_ALWAYS,"random seed %d\n", seed); 
@@ -780,4 +782,4 @@ int main(int argc, char **argv) {
 
     return EXIT_SUCCESS;
 
-} 
+}

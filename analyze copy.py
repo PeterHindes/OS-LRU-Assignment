@@ -12,20 +12,17 @@ import os.path
 run_lock = threading.Lock()
 # Track the last execution time globally
 last_execution_time = 0
-# Add shared data structures for collecting results
-shared_results = {}
-shared_results_lock = threading.Lock()
 
 def run_test_predict():
-    """Runs ./test-predict and parses the output."""
-    result = subprocess.run("./test-predict", shell=True, capture_output=True, text=True)
+    """Runs ./test-final and parses the output."""
+    result = subprocess.run("./test-final", shell=True, capture_output=True, text=True)
     output = (result.stdout + result.stderr).strip()  # Combine stdout and stderr
     
-    # print("Raw output from ./test-predict:")  # Comment out to reduce output
-    # print(repr(output))  # Comment out to reduce output
+    print("Raw output from ./test-final:")
+    print(repr(output))  # Print output with special characters visible
     
     if not output:
-        print("Error: No output received from ./test-predict. Ensure the program is running correctly.")
+        print("Error: No output received from ./test-final. Ensure the program is running correctly.")
         return None, None, None
     
     # Extract numerical values with error handling
@@ -53,65 +50,31 @@ def compute_statistics(data):
     min_value = min(data)
     return mean, stddev, max_swing, min_value
 
-def collect_and_print_stats(stop_event):
-    """Periodically collect and print aggregate statistics from all threads"""
-    while not stop_event.is_set():
-        # Sleep for 2 seconds
-        time.sleep(2)
-        
-        # Collect current results from all threads
-        with shared_results_lock:
-            if not shared_results:
-                continue
-                
-            # Make a copy of current data
-            all_blocked = []
-            all_compute = []
-            all_ratio = []
-            
-            for thread_data in shared_results.values():
-                all_blocked.extend(thread_data[0])  # blocked_cycles_list
-                all_compute.extend(thread_data[1])  # compute_cycles_list
-                all_ratio.extend(thread_data[2])    # ratio_list
-            
-            if not all_ratio:
-                print("\nNo data collected yet...")
-                continue
-                
-            # Calculate statistics
-            mean, stddev, max_swing, min_value = compute_statistics(all_ratio)
-            max_ratio = max(all_ratio) if all_ratio else 0
-            
-            # Print current stats
-            print("\nRunning Statistics (Updated every 2s):")
-            print(f"Samples collected so far: {len(all_ratio)}")
-            print(f"Mean: {mean:.6f}, StdDev: {stddev:.6f}, Max: {max_ratio:.6f}, Min: {min_value:.6f}")
-
 def thread_run_test(thread_id, runs, result_queue, start_delay=0):
     """Function to be run in each thread"""
-    global last_execution_time, shared_results
+    global last_execution_time
     
     print(f"Thread {thread_id} starting after {start_delay} seconds delay")
+    time.sleep(start_delay)  # Staggered start
     
     blocked_cycles_list = []
     compute_cycles_list = []
     ratio_list = []
     alert_file = f"high_ratios_thread_{thread_id}.log"
     
-    # Initialize thread's data in shared results
-    with shared_results_lock:
-        shared_results[thread_id] = [[], [], []]  # blocked, compute, ratio lists
-    
     for i in range(runs):
         # Acquire lock before running the test
         with run_lock:
             # Ensure 10ns have passed since the last execution
+            # Note: Python can't actually sleep for 10ns, but we'll set the threshold very low
             current_time = time.time()
             if current_time - last_execution_time < 10e-9:
                 wait_time = max(10e-9, (10e-9 - (current_time - last_execution_time)))
-                # print(f"Thread {thread_id} waiting {wait_time:.9f}s before starting run {i+1}")
+                print(f"Thread {thread_id} waiting {wait_time:.9f}s before starting run {i+1}")
+                # Use minimal sleep - system will use smallest possible value
+                time.sleep(0.001)  # 1ms is typically the minimum reliable sleep
             
-            # print(f"Thread {thread_id} starting run {i+1}")
+            print(f"Thread {thread_id} starting run {i+1}")
             # Update the last execution time
             last_execution_time = time.time()
             
@@ -123,13 +86,7 @@ def thread_run_test(thread_id, runs, result_queue, start_delay=0):
             compute_cycles_list.append(compute)
             ratio_list.append(ratio)
             
-            # Update the shared results for real-time monitoring
-            with shared_results_lock:
-                shared_results[thread_id][0].append(blocked)
-                shared_results[thread_id][1].append(compute)
-                shared_results[thread_id][2].append(ratio)
-            
-            # print(f"Thread {thread_id}, Run {i+1}: Blocked Cycles={blocked}, Compute Cycles={compute}, Ratio={ratio:.6f}")
+            print(f"Thread {thread_id}, Run {i+1}: Blocked Cycles={blocked}, Compute Cycles={compute}, Ratio={ratio:.6f}")
             
             # Check if ratio exceeds 0.04 and log it
             if ratio > 0.04:
@@ -138,10 +95,13 @@ def thread_run_test(thread_id, runs, result_queue, start_delay=0):
                     f.write(f"Run {i+1}: Blocked Cycles={blocked}, Compute Cycles={compute}, Ratio={ratio:.6f}\n")
             
             # Print running statistics
-            # mean, stddev, max_swing, min_value = compute_statistics(ratio_list)
-            # print(f"  Thread {thread_id} - Ratio - Mean: {mean:.6f}, Std Dev: {stddev:.6f}, Max Swing: {max_swing:.6f}")
-            # print(f"  Thread {thread_id} - Ratio - Max: {max(ratio_list):.6f}, Min: {min_value:.6f}")
-            # print("--------------------------------------------------")
+            mean, stddev, max_swing, min_value = compute_statistics(ratio_list)
+            print(f"  Thread {thread_id} - Ratio - Mean: {mean:.6f}, Std Dev: {stddev:.6f}, Max Swing: {max_swing:.6f}")
+            print(f"  Thread {thread_id} - Ratio - Max: {max(ratio_list):.6f}, Min: {min_value:.6f}")
+            print("--------------------------------------------------")
+        
+        # Minimal wait between runs
+        time.sleep(0.001)  # Reduced from 1.5s to 1ms
     
     # Put the results in the queue
     result_queue.put((thread_id, blocked_cycles_list, compute_cycles_list, ratio_list))
@@ -175,20 +135,8 @@ def save_statistics(label, total_runs, stats_dict):
 
 def main():
     # Initialize the last execution time
-    global last_execution_time, shared_results
+    global last_execution_time
     last_execution_time = time.time()
-    shared_results = {}
-    
-    # Create an event to signal the stats thread to stop
-    stats_stop_event = threading.Event()
-    
-    # Start the stats collection thread
-    stats_thread = threading.Thread(
-        target=collect_and_print_stats,
-        args=(stats_stop_event,)
-    )
-    stats_thread.daemon = True  # Make it a daemon so it stops when main thread exits
-    stats_thread.start()
     
     # Ask user for a label for this test run
     run_label = input("Enter a label for this test run: ")
@@ -209,15 +157,11 @@ def main():
         )
         threads.append(t)
         t.start()
-        # print(f"Started thread {i+1}")  # Comment out thread start message
+        print(f"Started thread {i+1}")
     
     # Wait for all threads to complete
     for t in threads:
         t.join()
-    
-    # When done, stop the stats thread
-    stats_stop_event.set()
-    stats_thread.join(timeout=1)  # Wait for stats thread to finish
     
     # Collect all results
     all_results = []
